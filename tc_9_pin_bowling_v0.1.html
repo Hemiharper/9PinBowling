@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Thursday Club #129 - 9 Pin Bowling</title>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Confetti -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body { background-color: #131313; color: #F7E6C8; font-family: -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
+        .tc-gradient { background: linear-gradient(135deg, #5E3273 0%, #3a1b49 100%); }
+        .gold-glow { text-shadow: 0 0 10px rgba(195, 164, 93, 0.5); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* Mascot Animation */
+        @keyframes dropIn {
+            0% { transform: translateY(-150%) scale(0.8) rotate(-10deg); opacity: 0; }
+            60% { transform: translateY(10%) scale(1.1) rotate(5deg); opacity: 1; }
+            80% { transform: translateY(-5%) scale(0.95) rotate(-2deg); }
+            100% { transform: translateY(0) scale(1) rotate(0); opacity: 1; }
+        }
+        @keyframes bounceDance {
+            0%, 100% { transform: translateY(0) scale(1); }
+            25% { transform: translateY(-10px) scale(1.05) rotate(3deg); }
+            75% { transform: translateY(-5px) scale(0.95) rotate(-3deg); }
+        }
+        .animate-mascot-drop {
+            animation: dropIn 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+        .animate-mascot-dance {
+            animation: bounceDance 2s ease-in-out infinite;
+            animation-delay: 1.5s; /* Starts after drop-in */
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // ==========================================
+        // 🛑 CONFIGURATION - ADD YOUR TOKENS HERE
+        // ==========================================
+        const AIRTABLE_PAT = 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b';
+        const AIRTABLE_BASE_ID = 'appgoVZaRVO1YvLh6/tblABOJom6dIkR2nH/viwnco6Y06vlya2Dg';
+        const AIRTABLE_TABLE = 'Players';
+        
+        // Polling interval for multiplayer sync
+        const SYNC_INTERVAL_MS = 3000; 
+
+        // Sound Effects
+        const sfx = {
+            thursday9: new Audio('Comical_rubber_chick_#3-1787048808849.mp3'),
+            perfect9: new Audio('perfect.mp3'),
+            fanfare: new Audio('fanfare.mp3')
+        };
+
+        // UI Colors
+        const THEME = {
+            bg: '#131313', purple: '#5E3273', purpleLight: '#82469d',
+            gold: '#C3A45D', goldBright: '#ffd700', cream: '#F7E6C8',
+            darkSurface: '#1c1822', cardBg: '#231e2b'
+        };
+
+        // Nickname Generator
+        const PREFIXES = ['Kingpin', 'The Bowling', 'Gutter', 'Split', 'Thunder', 'Alley', 'El', 'Big Pin', 'Striker', 'The Velvet'];
+        const SUFFIXES = ['Machine', 'Bandit', 'Prince', 'Wizard', 'Viper', 'Assassin', 'Loco', 'Weapon', 'Maverick', 'Boss'];
+        const generateNickname = (name) => {
+            if (!name) return "";
+            const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
+            const suffix = SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)];
+            return `${prefix} ${name.split(' ')[0]} ${suffix}`;
+        };
+
+        const Icon = ({ name, size = 24, color = "currentColor", className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current) {
+                    iconRef.current.innerHTML = '';
+                    const i = document.createElement('i');
+                    i.setAttribute('data-lucide', name);
+                    i.setAttribute('width', size);
+                    i.setAttribute('height', size);
+                    i.setAttribute('stroke', color);
+                    i.setAttribute('class', className);
+                    iconRef.current.appendChild(i);
+                    lucide.createIcons({ root: iconRef.current });
+                }
+            }, [name, size, color, className]);
+            return <span ref={iconRef} className={`inline-flex items-center justify-center ${className}`} />;
+        };
+
+        const initialPlayers = Array.from({ length: 11 }, (_, i) => ({
+            id: `p${i + 1}`,
+            recordId: null, // Airtable Row ID
+            name: '',
+            nickname: '',
+            officialScore: 0,
+            perfectNines: 0,
+            thursdayNines: 0,
+            currentFrame: 1
+        }));
+
+        const App = () => {
+            const [appPhase, setAppPhase] = useState('welcome'); // welcome, setup, game
+            const [players, setPlayers] = useState(initialPlayers);
+            const [activePlayerId, setActivePlayerId] = useState('p1');
+            const [activeTab, setActiveTab] = useState('scoring'); // scoring, standings, stats, podium
+            const [syncStatus, setSyncStatus] = useState('offline');
+
+            // --- Airtable Sync Logic ---
+            const fetchAirtable = async () => {
+                if(AIRTABLE_PAT === 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b') return;
+                
+                try {
+                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}`, {
+                        headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }
+                    });
+                    const data = await res.json();
+                    
+                    if (data.records) {
+                        setPlayers(prev => prev.map(p => {
+                            const record = data.records.find(r => r.fields.PlayerID === p.id);
+                            if (record) {
+                                return {
+                                    ...p,
+                                    recordId: record.id,
+                                    name: record.fields.Name || p.name,
+                                    nickname: record.fields.Nickname || p.nickname,
+                                    officialScore: record.fields.OfficialScore || p.officialScore,
+                                    perfectNines: record.fields.PerfectNines || p.perfectNines,
+                                    thursdayNines: record.fields.ThursdayNines || p.thursdayNines,
+                                    currentFrame: record.fields.CurrentFrame || p.currentFrame
+                                };
+                            }
+                            return p;
+                        }));
+                        setSyncStatus('synced');
+                    }
+                } catch (e) {
+                    console.error("Airtable fetch error:", e);
+                    setSyncStatus('error');
+                }
+            };
+
+            const pushToAirtable = async (player) => {
+                if(AIRTABLE_PAT === 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b' || !player.recordId) return;
+                setSyncStatus('syncing');
+                try {
+                    await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${player.recordId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            Authorization: `Bearer ${AIRTABLE_PAT}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            fields: {
+                                Name: player.name,
+                                Nickname: player.nickname,
+                                OfficialScore: player.officialScore,
+                                PerfectNines: player.perfectNines,
+                                ThursdayNines: player.thursdayNines,
+                                CurrentFrame: player.currentFrame
+                            }
+                        })
+                    });
+                    setSyncStatus('synced');
+                } catch (e) {
+                    console.error("Airtable update error:", e);
+                    setSyncStatus('error');
+                }
+            };
+
+            // Initial Load & Polling
+            useEffect(() => {
+                fetchAirtable();
+                const interval = setInterval(fetchAirtable, SYNC_INTERVAL_MS);
+                return () => clearInterval(interval);
+            }, []);
+
+            const updatePlayer = (id, updates) => {
+                let updatedPlayer = null;
+                setPlayers(prev => prev.map(p => {
+                    if (p.id === id) {
+                        updatedPlayer = { ...p, ...updates };
+                        return updatedPlayer;
+                    }
+                    return p;
+                }));
+                if (updatedPlayer) pushToAirtable(updatedPlayer);
+            };
+
+            const calculateTotal = (p) => p.officialScore + (p.perfectNines * 25) + (p.thursdayNines * 10);
+            
+            const activePlayer = players.find(p => p.id === activePlayerId) || players[0];
+            const sortedLeaderboard = [...players].sort((a, b) => calculateTotal(b) - calculateTotal(a));
+            
+            // Render: Welcome Phase
+            if (appPhase === 'welcome') {
+                return (
+                    <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+                        <img src="TC-Hats_4_Front.png" alt="Thursday Club Mascot" className="w-48 mb-6 drop-shadow-2xl" onerror="this.src='https://via.placeholder.com/200x200.png?text=Mascot'" />
+                        <h1 className="text-4xl font-black mb-2 uppercase tracking-wider text-[#C3A45D] gold-glow leading-tight">
+                            Thursday Club<br/>9 Pin Championship
+                        </h1>
+                        <h2 className="text-xl text-[#82469d] font-bold mb-8 uppercase tracking-widest">TC #129</h2>
+
+                        <div className="bg-[#231e2b] p-6 rounded-2xl border border-[#5E3273] mb-8 w-full max-w-md text-left shadow-lg">
+                            <h3 className="text-xl font-black text-[#C3A45D] mb-4 border-b border-[#5E3273] pb-3 uppercase flex items-center gap-2">
+                                <Icon name="scroll" size="20" /> How It Works
+                            </h3>
+                            <p className="text-sm mb-5 text-gray-300">This is <strong className="text-white">NOT</strong> regular bowling. We use the official alley score, but overlay our own championship rules.</p>
+                            <ul className="text-sm space-y-4">
+                                <li className="flex gap-3">
+                                    <div className="bg-[#5E3273] p-2 rounded-lg h-min"><Icon name="flame" size="18" color="#C3A45D" /></div>
+                                    <div>
+                                        <strong className="text-[#C3A45D] block text-base">Perfect Nine (+25 pts)</strong>
+                                        <span className="text-gray-400">Knock down exactly 9 pins on your <strong>FIRST</strong> ball.</span>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <div className="bg-[#5E3273] p-2 rounded-lg h-min"><Icon name="sparkles" size="18" color="#C3A45D" /></div>
+                                    <div>
+                                        <strong className="text-[#C3A45D] block text-base">Thursday Nine (+10 pts)</strong>
+                                        <span className="text-gray-400">Knock down exactly 9 pins on your <strong>SECOND</strong> ball.</span>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <div className="bg-[#231e2b] border border-gray-600 p-2 rounded-lg h-min"><Icon name="target" size="18" color="white" /></div>
+                                    <div>
+                                        <strong className="text-white block text-base">Official Score</strong>
+                                        <span className="text-gray-400">Whatever the screen says, add it to your total.</span>
+                                    </div>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <button
+                            onClick={() => setAppPhase('setup')}
+                            className="bg-[#C3A45D] text-[#131313] text-2xl font-black py-5 px-12 rounded-full mb-10 shadow-[0_0_30px_rgba(195,164,93,0.5)] transform hover:scale-105 active:scale-95 transition-all w-full max-w-md uppercase"
+                        >
+                            Let's Begin
+                        </button>
+
+                        <div className="text-[11px] text-[#82469d] max-w-md opacity-80 border-t border-[#5E3273] pt-6 pb-10">
+                            <p className="mb-2 font-bold text-center tracking-widest uppercase">Terms of Play</p>
+                            <p className="text-justify leading-relaxed">
+                                "As a player of 9Pin bowling you acknowledge that this is a curious, original and noteworthy spin on ordinary ten pin bowling, an activity that was a TC event 10 years prior to this event. As a result of all players acknowledgement, all participants will forfeit any right to assign a black mark to the organiser of this event. Stick that up ya bum Will."
+                            </p>
+                        </div>
+                    </div>
+                );
+            }
+
+            // Render: Setup Phase
+            if (appPhase === 'setup') {
+                return (
+                    <div className="min-h-screen p-4 pb-32 max-w-md mx-auto">
+                        <div className="text-center mb-8 pt-4">
+                            <h1 className="text-3xl font-black text-[#C3A45D] mb-2">Tournament Roster</h1>
+                            <p className="text-[#82469d]">Enter all 11 players to begin.</p>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            {players.map((p, idx) => (
+                                <div key={p.id} className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273]">
+                                    <div className="flex gap-4">
+                                        <div className="w-8 h-8 rounded-full bg-[#5E3273] flex items-center justify-center font-bold text-[#C3A45D] shrink-0">
+                                            {idx + 1}
+                                        </div>
+                                        <div className="flex-1 space-y-3">
+                                            <input 
+                                                type="text" 
+                                                placeholder="Real Name" 
+                                                value={p.name}
+                                                onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
+                                                className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-white placeholder-gray-500"
+                                            />
+                                            <div className="flex gap-2">
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Bowling Nickname" 
+                                                    value={p.nickname}
+                                                    onChange={(e) => updatePlayer(p.id, { nickname: e.target.value })}
+                                                    className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-[#C3A45D] font-bold placeholder-gray-500"
+                                                />
+                                                <button 
+                                                    onClick={() => updatePlayer(p.id, { nickname: generateNickname(p.name || 'Player') })}
+                                                    className="bg-[#5E3273] p-2 rounded text-white"
+                                                    title="Generate Nickname"
+                                                >
+                                                    <Icon name="refresh-cw" size="20" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="fixed bottom-0 left-0 right-0 p-4 bg-[#131313] border-t border-[#5E3273] z-10">
+                            <button 
+                                onClick={() => setAppPhase('game')}
+                                className="w-full bg-[#C3A45D] text-[#131313] font-black py-4 rounded-lg uppercase tracking-wider shadow-lg"
+                            >
+                                Lock Roster & Play
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // Render: Game Phase
+            return (
+                <div className="min-h-screen flex flex-col pb-20">
+                    {/* Header */}
+                    <header className="tc-gradient p-4 sticky top-0 z-20 shadow-md">
+                        <div className="flex justify-between items-center max-w-md mx-auto">
+                            <div className="flex items-center gap-2">
+                                <div className="bg-[#131313] p-1 rounded-full border border-[#C3A45D]">
+                                    <img src="TC-Hats_4_Front.png" className="w-8 h-8 object-contain" alt="TC" onerror="this.style.display='none'" />
+                                </div>
+                                <div>
+                                    <div className="text-[10px] font-bold text-[#C3A45D] uppercase tracking-widest bg-[#131313] px-2 py-0.5 rounded-full inline-block mb-1">TC #129</div>
+                                    <h1 className="text-sm font-black uppercase text-white leading-tight">9 Pin Championship</h1>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {/* Sync Status Indicator */}
+                                <div className={`w-3 h-3 rounded-full ${syncStatus === 'synced' ? 'bg-green-500' : syncStatus === 'syncing' ? 'bg-yellow-500' : 'bg-red-500'}`} title={`Sync Status: ${syncStatus}`}></div>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Marquee Ticker */}
+                    <div className="bg-[#C3A45D] text-[#131313] overflow-hidden whitespace-nowrap py-1 font-bold text-[10px] uppercase tracking-widest shadow-inner">
+                        <div className="inline-block animate-[ticker_20s_linear_infinite] px-4">
+                            <span className="bg-black text-white px-1 py-0.5 rounded mx-2">LIVE</span> Welcome to the official Thursday Club 9 Pin Bowling Championship... 
+                            <span className="mx-4 text-black">•</span> 
+                            Perfect Nine = +25 PTS... 
+                            <span className="mx-4 text-black">•</span> 
+                            Thursday Nine = +10 PTS... 
+                            <span className="mx-4 text-black">•</span> 
+                            Stick that up ya bum Will...
+                        </div>
+                    </div>
+
+                    <main className="flex-1 max-w-md w-full mx-auto relative">
+                        
+                        {/* TAB: SCORING */}
+                        {activeTab === 'scoring' && (
+                            <div className="p-4 space-y-4">
+                                {/* Horizontal Bowler Strip */}
+                                <div className="mb-4">
+                                    <div className="text-xs text-[#C3A45D] font-bold uppercase mb-2">Select Active Bowler</div>
+                                    <div className="flex overflow-x-auto gap-2 hide-scrollbar pb-2">
+                                        {players.map(p => (
+                                            <button 
+                                                key={p.id}
+                                                onClick={() => setActivePlayerId(p.id)}
+                                                className={`flex-shrink-0 p-3 rounded-lg border-2 text-left min-w-[120px] transition-all ${activePlayerId === p.id ? 'border-[#C3A45D] bg-[#231e2b]' : 'border-[#5E3273] bg-[#1c1822] opacity-70'}`}
+                                            >
+                                                <div className="font-bold text-white text-sm whitespace-normal leading-tight">{p.nickname || p.name || 'Unknown'}</div>
+                                                <div className="text-xs text-[#82469d] mt-1">F: {p.currentFrame}/10</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Active Bowler Card */}
+                                <div className="bg-[#231e2b] rounded-2xl border border-[#5E3273] overflow-hidden shadow-lg">
+                                    <div className="p-4 border-b border-[#5E3273] flex justify-between items-center bg-[#1c1822]">
+                                        <div>
+                                            <div className="text-xs text-[#C3A45D] font-bold uppercase tracking-wider mb-1">Frame {Math.min(activePlayer.currentFrame, 10)} of 10</div>
+                                            <h2 className="text-2xl font-black text-white leading-tight break-words">{activePlayer.nickname || activePlayer.name || 'Select a player'}</h2>
+                                        </div>
+                                        <div className="text-right shrink-0 ml-4">
+                                            <div className="text-[10px] text-gray-400 uppercase">Total Pts</div>
+                                            <div className="text-3xl font-black text-[#C3A45D]">{calculateTotal(activePlayer)}</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 space-y-5">
+                                        {/* Official Score Input */}
+                                        <div className="bg-[#1c1822] p-4 rounded-xl border border-[#5E3273] flex justify-between items-center">
+                                            <div>
+                                                <div className="font-bold text-white mb-1">Official Alley Score</div>
+                                                <div className="text-xs text-gray-400">Update directly from screen</div>
+                                            </div>
+                                            <input 
+                                                type="number" 
+                                                value={activePlayer.officialScore === 0 ? '' : activePlayer.officialScore}
+                                                onChange={(e) => updatePlayer(activePlayer.id, { officialScore: parseInt(e.target.value) || 0 })}
+                                                className="bg-[#131313] border-2 border-[#5E3273] rounded-lg text-2xl font-black text-center w-24 py-2 text-white"
+                                                placeholder="0"
+                                            />
+                                        </div>
+
+                                        {/* Action Buttons */}
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => {
+                                                    sfx.perfect9.currentTime = 0;
+                                                    sfx.perfect9.play().catch(e => console.log('Audio error:', e));
+                                                    updatePlayer(activePlayer.id, { perfectNines: activePlayer.perfectNines + 1 });
+                                                }}
+                                                className="flex-1 bg-[#5E3273] border-2 border-[#82469d] rounded-xl p-4 active:scale-95 transition-transform flex flex-col items-center justify-center text-center shadow-lg"
+                                            >
+                                                <div className="flex items-center gap-2 text-white font-black text-lg mb-1">
+                                                    <Icon name="flame" color="#C3A45D" /> PERFECT 9
+                                                </div>
+                                                <div className="bg-white/10 text-white text-xs px-2 py-1 rounded font-bold uppercase mb-2">+25 Points</div>
+                                                <div className="text-sm text-[#C3A45D]">Total Count: {activePlayer.perfectNines}</div>
+                                            </button>
+                                            <button 
+                                                onClick={() => {
+                                                    if(activePlayer.perfectNines > 0) updatePlayer(activePlayer.id, { perfectNines: activePlayer.perfectNines - 1 });
+                                                }}
+                                                className="w-16 bg-red-900/30 border-2 border-red-900/50 rounded-xl flex flex-col items-center justify-center text-red-500 text-[10px] font-bold active:bg-red-900/50"
+                                            >
+                                                <Icon name="minus" size="20" className="mb-1" />
+                                                UNDO
+                                            </button>
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => {
+                                                    sfx.thursday9.currentTime = 0;
+                                                    sfx.thursday9.play().catch(e => console.log('Audio error:', e));
+                                                    updatePlayer(activePlayer.id, { thursdayNines: activePlayer.thursdayNines + 1 });
+                                                }}
+                                                className="flex-1 bg-[#1c1822] border-2 border-[#C3A45D] rounded-xl p-4 active:scale-95 transition-transform flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(195,164,93,0.1)]"
+                                            >
+                                                <div className="flex items-center gap-2 text-[#C3A45D] font-black text-lg mb-1">
+                                                    <Icon name="sparkles" /> THURSDAY 9
+                                                </div>
+                                                <div className="bg-[#C3A45D]/10 text-[#C3A45D] text-xs px-2 py-1 rounded font-bold uppercase mb-2">+10 Points</div>
+                                                <div className="text-sm text-gray-400">Total Count: {activePlayer.thursdayNines}</div>
+                                            </button>
+                                            <button 
+                                                onClick={() => {
+                                                    if(activePlayer.thursdayNines > 0) updatePlayer(activePlayer.id, { thursdayNines: activePlayer.thursdayNines - 1 });
+                                                }}
+                                                className="w-16 bg-red-900/30 border-2 border-red-900/50 rounded-xl flex flex-col items-center justify-center text-red-500 text-[10px] font-bold active:bg-red-900/50"
+                                            >
+                                                <Icon name="minus" size="20" className="mb-1" />
+                                                UNDO
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Frame Advance */}
+                                    <div className="p-4 bg-[#1c1822] border-t border-[#5E3273]">
+                                        <button 
+                                            onClick={() => updatePlayer(activePlayer.id, { currentFrame: Math.min(10, activePlayer.currentFrame + 1) })}
+                                            disabled={activePlayer.currentFrame >= 10}
+                                            className="w-full bg-white text-black font-black py-4 rounded-lg uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50 disabled:bg-gray-600"
+                                        >
+                                            {activePlayer.currentFrame >= 10 ? 'FINISHED' : `ADVANCE TO FRAME ${activePlayer.currentFrame + 1}`}
+                                            {activePlayer.currentFrame < 10 && <Icon name="chevron-right" />}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB: STANDINGS */}
+                        {activeTab === 'standings' && (
+                            <div className="p-4 space-y-3">
+                                <h2 className="text-2xl font-black text-[#C3A45D] mb-4 uppercase">Live Leaderboard</h2>
+                                {sortedLeaderboard.map((p, index) => (
+                                    <div key={p.id} className={`flex items-center gap-4 p-3 rounded-xl border ${index === 0 ? 'bg-[#C3A45D]/10 border-[#C3A45D]' : 'bg-[#231e2b] border-[#5E3273]'}`}>
+                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${index === 0 ? 'bg-[#C3A45D] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#cd7f32] text-white' : 'bg-[#1c1822] text-gray-500'}`}>
+                                            {index + 1}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-bold text-white truncate">{p.nickname || p.name}</div>
+                                            <div className="text-[10px] text-[#82469d] uppercase">F: {p.currentFrame}/10 • Official: {p.officialScore}</div>
+                                        </div>
+                                        <div className="text-right shrink-0">
+                                            <div className="text-2xl font-black text-[#C3A45D]">{calculateTotal(p)}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* TAB: STATS */}
+                        {activeTab === 'stats' && (
+                            <div className="p-4 space-y-4">
+                                <h2 className="text-2xl font-black text-[#C3A45D] mb-4 uppercase">Championship Stats</h2>
+                                
+                                <div className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273]">
+                                    <div className="text-[#C3A45D] text-xs font-bold uppercase mb-2">Most Perfect Nines</div>
+                                    <div className="text-2xl font-black text-white">
+                                        {[...players].sort((a,b)=>b.perfectNines - a.perfectNines)[0]?.nickname || 'None yet'} 
+                                        <span className="text-[#82469d] ml-2">({[...players].sort((a,b)=>b.perfectNines - a.perfectNines)[0]?.perfectNines || 0})</span>
+                                    </div>
+                                </div>
+
+                                <div className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273]">
+                                    <div className="text-[#C3A45D] text-xs font-bold uppercase mb-2">Most Thursday Nines</div>
+                                    <div className="text-2xl font-black text-white">
+                                        {[...players].sort((a,b)=>b.thursdayNines - a.thursdayNines)[0]?.nickname || 'None yet'} 
+                                        <span className="text-[#82469d] ml-2">({[...players].sort((a,b)=>b.thursdayNines - a.thursdayNines)[0]?.thursdayNines || 0})</span>
+                                    </div>
+                                </div>
+
+                                <div className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273]">
+                                    <div className="text-[#C3A45D] text-xs font-bold uppercase mb-2">Total Combined Pts</div>
+                                    <div className="text-4xl font-black text-white">
+                                        {players.reduce((acc, p) => acc + calculateTotal(p), 0)}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB: PODIUM (CEREMONY) */}
+                        {activeTab === 'podium' && (
+                            <div className="p-4 h-full flex flex-col items-center justify-center text-center">
+                                <h2 className="text-2xl font-black text-white mb-8 uppercase">Awards Ceremony</h2>
+                                
+                                {players.every(p => p.currentFrame >= 10) ? (
+                                    <button 
+                                        onClick={() => {
+                                            sfx.fanfare.play().catch(e => console.log('Audio error:', e));
+                                            
+                                            // Speech synthesis
+                                            if ('speechSynthesis' in window) {
+                                                const winner = sortedLeaderboard[0];
+                                                const utterance = new SpeechSynthesisUtterance(`Congratulations ${winner.nickname || winner.name}, you are the official Thursday Club 9 Pin Champion!`);
+                                                utterance.rate = 0.9;
+                                                window.speechSynthesis.speak(utterance);
+                                            }
+
+                                            // Confetti
+                                            const duration = 5 * 1000;
+                                            const end = Date.now() + duration;
+                                            (function frame() {
+                                                confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors: ['#5E3273', '#C3A45D'] });
+                                                confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors: ['#5E3273', '#C3A45D'] });
+                                                if (Date.now() < end) requestAnimationFrame(frame);
+                                            }());
+
+                                            // Trigger CSS Animation
+                                            const mascot = document.getElementById('ceremony-mascot');
+                                            if(mascot) {
+                                                mascot.style.opacity = '1';
+                                                mascot.classList.add('animate-mascot-drop');
+                                                setTimeout(() => {
+                                                    mascot.classList.remove('animate-mascot-drop');
+                                                    mascot.classList.add('animate-mascot-dance');
+                                                }, 1500);
+                                            }
+                                        }}
+                                        className="bg-[#C3A45D] text-black font-black text-2xl py-6 px-8 rounded-2xl w-full shadow-[0_0_30px_rgba(195,164,93,0.5)] transform hover:scale-105 active:scale-95 transition-all mb-12 uppercase leading-tight"
+                                    >
+                                        Crown The<br/>Champion
+                                    </button>
+                                ) : (
+                                    <div className="bg-[#1c1822] border border-[#5E3273] p-8 rounded-2xl text-gray-500 mb-12 w-full">
+                                        <Icon name="lock" size="48" className="mx-auto mb-4 opacity-50" />
+                                        <p className="font-bold uppercase tracking-wider text-sm">Finish all 10 frames<br/>to unlock ceremony</p>
+                                    </div>
+                                )}
+
+                                {/* Mascot Animation Container */}
+                                <div className="relative w-full h-64 flex justify-center items-end border-b-4 border-[#C3A45D]">
+                                    <img 
+                                        id="ceremony-mascot"
+                                        src="TC-Hats_4_Front.png" 
+                                        className="w-48 absolute bottom-0 opacity-0" 
+                                        alt="Champion Mascot"
+                                        style={{ transformOrigin: 'bottom center' }}
+                                    />
+                                    <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest absolute -bottom-6">Podium</div>
+                                </div>
+
+                                {/* Dev Menu */}
+                                <div className="mt-20">
+                                    <button 
+                                        onClick={() => {
+                                            setPlayers(prev => prev.map(p => ({ ...p, currentFrame: 10 })));
+                                        }}
+                                        className="text-[10px] text-[#82469d] hover:text-[#C3A45D] transition-colors underline uppercase tracking-wider"
+                                    >
+                                        [Dev] Fast-Forward Game to Test Animation
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Bottom Navigation */}
+                    <nav className="fixed bottom-0 left-0 right-0 bg-[#131313] border-t border-[#5E3273] flex justify-around p-2 pb-6 z-20 shadow-[0_-10px_20px_rgba(0,0,0,0.5)]">
+                        <button onClick={() => setActiveTab('scoring')} className={`flex flex-col items-center p-2 ${activeTab === 'scoring' ? 'text-[#C3A45D]' : 'text-gray-500'}`}>
+                            <Icon name="target" />
+                            <span className="text-[10px] mt-1 font-bold uppercase">Scoring</span>
+                        </button>
+                        <button onClick={() => setActiveTab('standings')} className={`flex flex-col items-center p-2 ${activeTab === 'standings' ? 'text-[#C3A45D]' : 'text-gray-500'}`}>
+                            <Icon name="award" />
+                            <span className="text-[10px] mt-1 font-bold uppercase">Standings</span>
+                        </button>
+                        <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center p-2 ${activeTab === 'stats' ? 'text-[#C3A45D]' : 'text-gray-500'}`}>
+                            <Icon name="bar-chart-2" />
+                            <span className="text-[10px] mt-1 font-bold uppercase">Stats</span>
+                        </button>
+                        <button onClick={() => setActiveTab('podium')} className={`flex flex-col items-center p-2 ${activeTab === 'podium' ? 'text-[#C3A45D]' : 'text-gray-500'}`}>
+                            <Icon name="crown" />
+                            <span className="text-[10px] mt-1 font-bold uppercase">Podium</span>
+                        </button>
+                    </nav>
+                </div>
+            );
+        };
+
+        // Render App
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    
+    <style>
+        @keyframes ticker {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+    </style>
+</body>
+</html>
