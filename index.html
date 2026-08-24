@@ -46,45 +46,73 @@
         const AIRTABLE_PAT = 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b';
         const AIRTABLE_BASE_ID = 'appgoVZaRVO1YvLh6';
         const AIRTABLE_TABLE = 'Players';
-        const SYNC_INTERVAL_MS = 3000; 
+        const SYNC_INTERVAL_MS = 2500; 
 
-        // Sound Effects with Fallbacks
+        // Active Gemini API Key
+        const GEMINI_API_KEY = 'AQ.Ab8RN6L3JLRpSqMADupAHoV19yXxn4wDekFHSnAexC0vSn6IFg';
+
+        // Sound Effects with Muted Unlocking
         const sfx = {
             thursday9: new Audio('thursday.mp3'),
             perfect9: new Audio('perfect.mp3'),
             fanfare: new Audio('fanfare.mp3')
         };
 
-        // Fallback for Thursday 9 if named differently in repo
         sfx.thursday9.addEventListener('error', () => {
             sfx.thursday9.src = 'Comical_rubber_chick_%233-1787048808849.mp3';
         });
 
-        // Helper to unlock and play audio safely on mobile
         const playSfx = (soundKey) => {
             const audio = sfx[soundKey];
             if (audio) {
+                audio.muted = false;
                 audio.currentTime = 0;
-                audio.play().catch(e => console.log('Audio playback blocked/failed:', e));
+                audio.play().catch(e => console.log('Audio blocked:', e));
             }
         };
 
+        // Silent Audio Unlock (Prevents sound bleed on setup screens)
         const unlockAllAudio = () => {
             Object.values(sfx).forEach(a => {
+                a.muted = true;
                 a.play().then(() => {
                     a.pause();
                     a.currentTime = 0;
+                    a.muted = false;
                 }).catch(() => {});
             });
         };
 
         const PREFIXES = ['Kingpin', 'The Bowling', 'Gutter', 'Split', 'Thunder', 'Alley', 'El', 'Big Pin', 'Striker', 'The Velvet'];
         const SUFFIXES = ['Machine', 'Bandit', 'Prince', 'Wizard', 'Viper', 'Assassin', 'Loco', 'Weapon', 'Maverick', 'Boss'];
-        const generateNickname = (name) => {
-            if (!name) return "";
-            const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
-            const suffix = SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)];
-            return `${prefix} ${name.split(' ')[0]} ${suffix}`;
+        
+        const generateGeminiNickname = async (name) => {
+            if (!name) return "The Bowling Legend";
+            if (!GEMINI_API_KEY || GEMINI_API_KEY.startsWith('YOUR_')) {
+                const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
+                const suffix = SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)];
+                return `${prefix} ${name.split(' ')[0]} ${suffix}`;
+            }
+
+            try {
+                const prompt = `Generate ONE ridiculously funny, absurd bowling nickname for "${name}". Return ONLY the nickname string.`;
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+
+                const data = await response.json();
+                const nickname = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/^["']|["']$/g, '');
+                return nickname || `${name} "The Pin Crusher"`;
+            } catch (e) {
+                return `${name} "The Alley Cat"`;
+            }
+        };
+
+        const generateAvatarUrl = (seed) => {
+            const cleanSeed = encodeURIComponent(seed || 'bowler');
+            return `https://api.dicebear.com/7.x/fun-emoji/svg?seed=${cleanSeed}&radius=50&backgroundColor=5e3273`;
         };
 
         const Icon = ({ name, size = 24, color = "currentColor", className = "" }) => {
@@ -123,23 +151,24 @@
             const [activeTab, setActiveTab] = useState('scoring');
             const [syncStatus, setSyncStatus] = useState('offline');
             const [showResetModal, setShowResetModal] = useState(false);
+            const [loadingAiId, setLoadingAiId] = useState(null);
 
             useEffect(() => {
                 localStorage.setItem('tc_app_phase', appPhase);
             }, [appPhase]);
 
             const fetchAirtable = async () => {
-                if(!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_')) return;
+                if (!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_')) return;
                 
                 try {
-                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}`, {
+                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}?sort%5B0%5D%5Bfield%5D=PlayerID`, {
                         headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }
                     });
                     const data = await res.json();
                     
-                    if (data.records) {
-                        setPlayers(prev => prev.map(p => {
-                            const record = data.records.find(r => r.fields.PlayerID === p.id);
+                    if (data.records && data.records.length > 0) {
+                        setPlayers(prev => prev.map((p, idx) => {
+                            const record = data.records.find(r => r.fields.PlayerID === p.id) || data.records[idx];
                             if (record) {
                                 return {
                                     ...p,
@@ -163,7 +192,7 @@
             };
 
             const pushToAirtable = async (player) => {
-                if(!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_') || !player.recordId) return;
+                if (!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_') || !player.recordId) return;
                 setSyncStatus('syncing');
                 try {
                     await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${player.recordId}`, {
@@ -174,12 +203,13 @@
                         },
                         body: JSON.stringify({
                             fields: {
-                                Name: player.name,
-                                Nickname: player.nickname,
-                                OfficialScore: player.officialScore,
-                                PerfectNines: player.perfectNines,
-                                ThursdayNines: player.thursdayNines,
-                                CurrentFrame: player.currentFrame
+                                PlayerID: player.id,
+                                Name: player.name || '',
+                                Nickname: player.nickname || '',
+                                OfficialScore: Number(player.officialScore) || 0,
+                                PerfectNines: Number(player.perfectNines) || 0,
+                                ThursdayNines: Number(player.thursdayNines) || 0,
+                                CurrentFrame: Number(player.currentFrame) || 1
                             }
                         })
                     });
@@ -190,7 +220,6 @@
                 }
             };
 
-            // Master Reset Function
             const handleFullReset = async () => {
                 setShowResetModal(false);
                 localStorage.removeItem('tc_app_phase');
@@ -207,8 +236,6 @@
                 }));
 
                 setPlayers(resetRoster);
-
-                // Push reset state to Airtable for all records
                 for (const player of resetRoster) {
                     if (player.recordId) {
                         await pushToAirtable(player);
@@ -303,39 +330,50 @@
                     <div className="min-h-screen p-4 pb-32 max-w-md mx-auto">
                         <div className="text-center mb-8 pt-4">
                             <h1 className="text-3xl font-black text-[#C3A45D] mb-2">Tournament Roster</h1>
-                            <p className="text-[#82469d]">Enter all 11 players to begin.</p>
+                            <p className="text-[#82469d]">Enter player names & generate AI identities.</p>
                         </div>
                         
                         <div className="space-y-4">
                             {players.map((p, idx) => (
-                                <div key={p.id} className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273]">
-                                    <div className="flex gap-4">
-                                        <div className="w-8 h-8 rounded-full bg-[#5E3273] flex items-center justify-center font-bold text-[#C3A45D] shrink-0">
-                                            {idx + 1}
-                                        </div>
-                                        <div className="flex-1 space-y-3">
+                                <div key={p.id} className="bg-[#231e2b] p-4 rounded-xl border border-[#5E3273] flex items-center gap-3">
+                                    <img 
+                                        src={generateAvatarUrl(p.nickname || p.name || p.id)} 
+                                        alt="Avatar" 
+                                        className="w-12 h-12 rounded-full border-2 border-[#C3A45D] bg-[#1c1822] shrink-0"
+                                    />
+                                    
+                                    <div className="flex-1 space-y-2">
+                                        <input 
+                                            type="text" 
+                                            placeholder={`Player ${idx + 1} Name`} 
+                                            value={p.name}
+                                            onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
+                                            className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-white text-sm placeholder-gray-500"
+                                        />
+                                        <div className="flex gap-2">
                                             <input 
                                                 type="text" 
-                                                placeholder="Real Name" 
-                                                value={p.name}
-                                                onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
-                                                className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-white placeholder-gray-500"
+                                                placeholder="AI Nickname" 
+                                                value={p.nickname}
+                                                onChange={(e) => updatePlayer(p.id, { nickname: e.target.value })}
+                                                className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-[#C3A45D] font-bold text-sm placeholder-gray-500"
                                             />
-                                            <div className="flex gap-2">
-                                                <input 
-                                                    type="text" 
-                                                    placeholder="Bowling Nickname" 
-                                                    value={p.nickname}
-                                                    onChange={(e) => updatePlayer(p.id, { nickname: e.target.value })}
-                                                    className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-[#C3A45D] font-bold placeholder-gray-500"
-                                                />
-                                                <button 
-                                                    onClick={() => updatePlayer(p.id, { nickname: generateNickname(p.name || 'Player') })}
-                                                    className="bg-[#5E3273] p-2 rounded text-white"
-                                                >
-                                                    <Icon name="refresh-cw" size="20" />
-                                                </button>
-                                            </div>
+                                            <button 
+                                                onClick={async () => {
+                                                    setLoadingAiId(p.id);
+                                                    const aiNick = await generateGeminiNickname(p.name || `Player ${idx + 1}`);
+                                                    updatePlayer(p.id, { nickname: aiNick });
+                                                    setLoadingAiId(null);
+                                                }}
+                                                disabled={loadingAiId === p.id}
+                                                className="bg-[#5E3273] hover:bg-[#82469d] px-3 py-2 rounded text-white text-xs font-bold shrink-0 flex items-center gap-1 disabled:opacity-50"
+                                            >
+                                                {loadingAiId === p.id ? (
+                                                    <Icon name="loader-2" size="16" className="animate-spin" />
+                                                ) : (
+                                                    <><Icon name="sparkles" size="16" color="#C3A45D" /> AI</>
+                                                )}
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -383,7 +421,6 @@
                         </div>
                     </header>
 
-                    {/* Reset Confirmation Modal */}
                     {showResetModal && (
                         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
                             <div className="bg-[#231e2b] border-2 border-red-500 p-6 rounded-2xl max-w-xs w-full text-center space-y-4">
@@ -408,10 +445,13 @@
                                             <button 
                                                 key={p.id}
                                                 onClick={() => setActivePlayerId(p.id)}
-                                                className={`flex-shrink-0 p-3 rounded-lg border-2 text-left min-w-[120px] transition-all ${activePlayerId === p.id ? 'border-[#C3A45D] bg-[#231e2b]' : 'border-[#5E3273] bg-[#1c1822] opacity-70'}`}
+                                                className={`flex-shrink-0 p-3 rounded-lg border-2 text-left min-w-[130px] transition-all flex items-center gap-2 ${activePlayerId === p.id ? 'border-[#C3A45D] bg-[#231e2b]' : 'border-[#5E3273] bg-[#1c1822] opacity-70'}`}
                                             >
-                                                <div className="font-bold text-white text-sm whitespace-normal leading-tight">{p.nickname || p.name || 'Unknown'}</div>
-                                                <div className="text-xs text-[#82469d] mt-1">F: {p.currentFrame}/10</div>
+                                                <img src={generateAvatarUrl(p.nickname || p.name || p.id)} className="w-8 h-8 rounded-full bg-black shrink-0" alt="" />
+                                                <div className="min-w-0">
+                                                    <div className="font-bold text-white text-xs truncate">{p.nickname || p.name || 'Unknown'}</div>
+                                                    <div className="text-[10px] text-[#82469d]">F: {p.currentFrame}/10</div>
+                                                </div>
                                             </button>
                                         ))}
                                     </div>
@@ -419,11 +459,14 @@
 
                                 <div className="bg-[#231e2b] rounded-2xl border border-[#5E3273] overflow-hidden shadow-lg">
                                     <div className="p-4 border-b border-[#5E3273] flex justify-between items-center bg-[#1c1822]">
-                                        <div>
-                                            <div className="text-xs text-[#C3A45D] font-bold uppercase tracking-wider mb-1">Frame {Math.min(activePlayer.currentFrame, 10)} of 10</div>
-                                            <h2 className="text-2xl font-black text-white leading-tight break-words">{activePlayer.nickname || activePlayer.name || 'Select a player'}</h2>
+                                        <div className="flex items-center gap-3">
+                                            <img src={generateAvatarUrl(activePlayer.nickname || activePlayer.name || activePlayer.id)} className="w-12 h-12 rounded-full border-2 border-[#C3A45D] bg-black" alt="" />
+                                            <div>
+                                                <div className="text-xs text-[#C3A45D] font-bold uppercase tracking-wider mb-0.5">Frame {Math.min(activePlayer.currentFrame, 10)} of 10</div>
+                                                <h2 className="text-xl font-black text-white leading-tight break-words">{activePlayer.nickname || activePlayer.name || 'Select a player'}</h2>
+                                            </div>
                                         </div>
-                                        <div className="text-right shrink-0 ml-4">
+                                        <div className="text-right shrink-0 ml-2">
                                             <div className="text-[10px] text-gray-400 uppercase">Total Pts</div>
                                             <div className="text-3xl font-black text-[#C3A45D]">{calculateTotal(activePlayer)}</div>
                                         </div>
@@ -513,10 +556,11 @@
                             <div className="p-4 space-y-3">
                                 <h2 className="text-2xl font-black text-[#C3A45D] mb-4 uppercase">Live Leaderboard</h2>
                                 {sortedLeaderboard.map((p, index) => (
-                                    <div key={p.id} className={`flex items-center gap-4 p-3 rounded-xl border ${index === 0 ? 'bg-[#C3A45D]/10 border-[#C3A45D]' : 'bg-[#231e2b] border-[#5E3273]'}`}>
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${index === 0 ? 'bg-[#C3A45D] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#cd7f32] text-white' : 'bg-[#1c1822] text-gray-500'}`}>
+                                    <div key={p.id} className={`flex items-center gap-3 p-3 rounded-xl border ${index === 0 ? 'bg-[#C3A45D]/10 border-[#C3A45D]' : 'bg-[#231e2b] border-[#5E3273]'}`}>
+                                        <div className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-xs shrink-0 ${index === 0 ? 'bg-[#C3A45D] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#cd7f32] text-white' : 'bg-[#1c1822] text-gray-500'}`}>
                                             {index + 1}
                                         </div>
+                                        <img src={generateAvatarUrl(p.nickname || p.name || p.id)} className="w-10 h-10 rounded-full border border-[#C3A45D] bg-black shrink-0" alt="" />
                                         <div className="flex-1 min-w-0">
                                             <div className="font-bold text-white truncate">{p.nickname || p.name}</div>
                                             <div className="text-[10px] text-[#82469d] uppercase">F: {p.currentFrame}/10 • Official: {p.officialScore}</div>
