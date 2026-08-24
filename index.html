@@ -46,7 +46,7 @@
         const AIRTABLE_PAT = 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b';
         const AIRTABLE_BASE_ID = 'appgoVZaRVO1YvLh6';
         const AIRTABLE_TABLE = 'Players';
-        const SYNC_INTERVAL_MS = 2500; 
+        const SYNC_INTERVAL_MS = 3000; 
 
         const GEMINI_API_KEY = 'AQ.Ab8RN6L3JLRpSqMADupAHoV19yXxn4wDekFHSnAexC0vSn6IFg';
 
@@ -160,7 +160,6 @@
                 localStorage.setItem('tc_app_phase', appPhase);
             }, [appPhase]);
 
-            // Robust Airtable Fetch
             const fetchAirtable = async () => {
                 if (!AIRTABLE_PAT) return;
                 
@@ -171,7 +170,7 @@
                     
                     if (!res.ok) {
                         const err = await res.json();
-                        setSyncError(`Airtable Fetch Error (${res.status}): ${err.error?.message || err.error || 'Failed'}`);
+                        setSyncError(`Airtable Error (${res.status}): ${err.error?.message || err.error || 'Failed'}`);
                         setSyncStatus('error');
                         return;
                     }
@@ -186,8 +185,9 @@
                                 return {
                                     ...p,
                                     recordId: record.id,
-                                    name: record.fields.Name !== undefined ? record.fields.Name : p.name,
-                                    nickname: record.fields.Nickname !== undefined ? record.fields.Nickname : p.nickname,
+                                    // Preserve local input text if currently setting up roster
+                                    name: appPhase === 'setup' && p.name !== '' ? p.name : (record.fields.Name !== undefined ? record.fields.Name : p.name),
+                                    nickname: appPhase === 'setup' && p.nickname !== '' ? p.nickname : (record.fields.Nickname !== undefined ? record.fields.Nickname : p.nickname),
                                     officialScore: record.fields.OfficialScore !== undefined ? Number(record.fields.OfficialScore) : p.officialScore,
                                     perfectNines: record.fields.PerfectNines !== undefined ? Number(record.fields.PerfectNines) : p.perfectNines,
                                     thursdayNines: record.fields.ThursdayNines !== undefined ? Number(record.fields.ThursdayNines) : p.thursdayNines,
@@ -205,7 +205,6 @@
                 }
             };
 
-            // Smart Push: Creates record (POST) if missing, otherwise Updates (PATCH)
             const pushToAirtable = async (player) => {
                 if (!AIRTABLE_PAT) return;
                 
@@ -290,14 +289,12 @@
                 fetchAirtable();
                 const interval = setInterval(fetchAirtable, SYNC_INTERVAL_MS);
                 return () => clearInterval(interval);
-            }, []);
+            }, [appPhase]);
 
-            // Local State Update
             const updatePlayerLocal = (id, updates) => {
                 setPlayers(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
             };
 
-            // Immediate Local + Sync Update (for buttons/blurs)
             const updatePlayerAndSync = (id, updates) => {
                 let updatedPlayer = null;
                 setPlayers(prev => prev.map(p => {
@@ -318,7 +315,12 @@
             if (appPhase === 'welcome') {
                 return (
                     <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-                        <img src="TC-Hats_4_Front_3.png" alt="Mascot" className="w-48 mb-6 drop-shadow-2xl" onError={(e)=>{e.target.src='Chicken-champ.png'}} />
+                        <img 
+                            src="TC-Hats_4_Front_3.png" 
+                            alt="Mascot" 
+                            className="w-48 mb-6 drop-shadow-2xl" 
+                            onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }} 
+                        />
                         <h1 className="text-4xl font-black mb-2 uppercase tracking-wider text-[#C3A45D] gold-glow leading-tight">
                             Thursday Club<br/>9 Pin Championship
                         </h1>
@@ -457,7 +459,12 @@
                         <div className="flex justify-between items-center max-w-md mx-auto">
                             <div className="flex items-center gap-2">
                                 <div className="bg-[#131313] p-1 rounded-full border border-[#C3A45D]">
-                                    <img src="TC-Hats_4_Front_3.png" className="w-8 h-8 object-contain" alt="TC" onError={(e)=>{e.target.style.display='none'}} />
+                                    <img 
+                                        src="TC-Hats_4_Front_3.png" 
+                                        className="w-8 h-8 object-contain" 
+                                        alt="TC" 
+                                        onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }} 
+                                    />
                                 </div>
                                 <div>
                                     <div className="text-[10px] font-bold text-[#C3A45D] uppercase tracking-widest bg-[#131313] px-2 py-0.5 rounded-full inline-block mb-1">TC #129</div>
@@ -702,14 +709,14 @@
                                         src="Champ-crown.png" 
                                         className="w-28 absolute top-2 z-10 opacity-0" 
                                         alt="Crown"
-                                        onError={(e)=>{e.target.style.display='none'}}
+                                        onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }}
                                     />
                                     <img 
                                         id="ceremony-chicken"
                                         src="Chicken-champ.png" 
                                         className="w-48 absolute bottom-0 opacity-0" 
                                         alt="Champion Chicken"
-                                        onError={(e)=>{e.target.src='TC-Hats_4_Front_3.png'}}
+                                        onError={(e) => { e.target.onerror = null; e.target.src = 'TC-Hats_4_Front_3.png'; }}
                                     />
                                     <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest absolute -bottom-6">Podium</div>
                                 </div>
