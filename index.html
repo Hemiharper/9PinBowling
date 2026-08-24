@@ -15,7 +15,7 @@
     <style>
         body { background-color: #131313; color: #F7E6C8; font-family: -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
         .tc-gradient { background: linear-gradient(135deg, #5E3273 0%, #3a1b49 100%); }
-        .gold-glow { text-shadow: 0 0 10px rgba(195, 164, 93, 0.5); }
+        .gold-glow { text-shadow: 0 0 12px rgba(195, 164, 93, 0.7); }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         
@@ -29,11 +29,18 @@
             25% { transform: translateY(-12px) rotate(4deg); }
             75% { transform: translateY(-6px) rotate(-4deg); }
         }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         .animate-hat-float {
             animation: hatFloatDown 1.3s cubic-bezier(0.25, 1, 0.5, 1) forwards;
         }
         .animate-mascot-dance {
             animation: bounceDance 1.8s ease-in-out infinite;
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.8s ease-out forwards;
         }
     </style>
 </head>
@@ -155,7 +162,11 @@
             const [syncError, setSyncError] = useState(null);
             const [showResetModal, setShowResetModal] = useState(false);
             const [loadingAiId, setLoadingAiId] = useState(null);
-            const [crownStage, setCrownStage] = useState('idle'); // idle, crowning, crowned
+            const [crownStage, setCrownStage] = useState('idle');
+
+            // Touch Swipe Tracking
+            const touchStartX = useRef(0);
+            const touchEndX = useRef(0);
 
             useEffect(() => {
                 localStorage.setItem('tc_app_phase', appPhase);
@@ -306,10 +317,43 @@
                 });
             };
 
+            // Swipe Handler Functions
+            const handleTouchStart = (e) => {
+                touchStartX.current = e.targetTouches[0].clientX;
+                touchEndX.current = e.targetTouches[0].clientX;
+            };
+
+            const handleTouchMove = (e) => {
+                touchEndX.current = e.targetTouches[0].clientX;
+            };
+
+            const handleTouchEnd = () => {
+                const swipeDistance = touchStartX.current - touchEndX.current;
+                const minSwipeDistance = 50;
+
+                if (Math.abs(swipeDistance) > minSwipeDistance) {
+                    const currentIndex = players.findIndex(p => p.id === activePlayerId);
+                    if (currentIndex !== -1) {
+                        let nextIndex;
+                        if (swipeDistance > 0) {
+                            // Swiped Left -> Next Player
+                            nextIndex = (currentIndex + 1) % players.length;
+                        } else {
+                            // Swiped Right -> Previous Player
+                            nextIndex = (currentIndex - 1 + players.length) % players.length;
+                        }
+                        setActivePlayerId(players[nextIndex].id);
+                    }
+                }
+                touchStartX.current = 0;
+                touchEndX.current = 0;
+            };
+
             const calculateTotal = (p) => p.officialScore + (p.perfectNines * 25) + (p.thursdayNines * 10);
             
             const activePlayer = players.find(p => p.id === activePlayerId) || players[0];
             const sortedLeaderboard = [...players].sort((a, b) => calculateTotal(b) - calculateTotal(a));
+            const winner = sortedLeaderboard[0] || players[0];
             
             if (appPhase === 'welcome') {
                 return (
@@ -507,7 +551,10 @@
                         {activeTab === 'scoring' && (
                             <div className="p-4 space-y-4">
                                 <div className="mb-4">
-                                    <div className="text-xs text-[#C3A45D] font-bold uppercase mb-2">Select Active Bowler</div>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div className="text-xs text-[#C3A45D] font-bold uppercase">Select Active Bowler</div>
+                                        <div className="text-[10px] text-gray-400 italic">👈 Swipe card to switch 👉</div>
+                                    </div>
                                     <div className="flex overflow-x-auto gap-2 hide-scrollbar pb-2">
                                         {players.map(p => (
                                             <button 
@@ -525,7 +572,13 @@
                                     </div>
                                 </div>
 
-                                <div className="bg-[#231e2b] rounded-2xl border border-[#5E3273] overflow-hidden shadow-lg">
+                                {/* Active Bowler Card with Touch Swipe Enabled */}
+                                <div 
+                                    onTouchStart={handleTouchStart}
+                                    onTouchMove={handleTouchMove}
+                                    onTouchEnd={handleTouchEnd}
+                                    className="bg-[#231e2b] rounded-2xl border border-[#5E3273] overflow-hidden shadow-lg touch-pan-y"
+                                >
                                     <div className="p-4 border-b border-[#5E3273] flex justify-between items-center bg-[#1c1822]">
                                         <div className="flex items-center gap-3">
                                             <img src={generateAvatarUrl(activePlayer.nickname || activePlayer.name || activePlayer.id)} className="w-12 h-12 rounded-full border-2 border-[#C3A45D] bg-black" alt="" />
@@ -662,8 +715,8 @@
                         )}
 
                         {activeTab === 'podium' && (
-                            <div className="p-4 h-full flex flex-col items-center justify-center text-center">
-                                <h2 className="text-2xl font-black text-white mb-8 uppercase">Awards Ceremony</h2>
+                            <div className="p-4 h-full flex flex-col items-center justify-center text-center bg-black min-h-screen">
+                                <h2 className="text-2xl font-black text-white mb-6 uppercase">Awards Ceremony</h2>
                                 
                                 {players.every(p => p.currentFrame >= 10) ? (
                                     <button 
@@ -679,24 +732,23 @@
                                                 if (Date.now() < end) requestAnimationFrame(frame);
                                             }());
 
-                                            // Transition to full crowned & dancing mascot after hat lands
                                             setTimeout(() => {
                                                 setCrownStage('crowned');
                                             }, 1300);
                                         }}
-                                        className="bg-[#C3A45D] text-black font-black text-2xl py-6 px-8 rounded-2xl w-full shadow-[0_0_30px_rgba(195,164,93,0.5)] transform hover:scale-105 active:scale-95 transition-all mb-12 uppercase leading-tight"
+                                        className="bg-[#C3A45D] text-black font-black text-2xl py-6 px-8 rounded-2xl w-full shadow-[0_0_30px_rgba(195,164,93,0.5)] transform hover:scale-105 active:scale-95 transition-all mb-8 uppercase leading-tight"
                                     >
                                         Crown The<br/>Champion
                                     </button>
                                 ) : (
-                                    <div className="bg-[#1c1822] border border-[#5E3273] p-8 rounded-2xl text-gray-500 mb-12 w-full">
+                                    <div className="bg-[#1c1822] border border-[#5E3273] p-8 rounded-2xl text-gray-500 mb-8 w-full">
                                         <Icon name="lock" size="48" className="mx-auto mb-4 opacity-50" />
                                         <p className="font-bold uppercase tracking-wider text-sm">Finish all 10 frames<br/>to unlock ceremony</p>
                                     </div>
                                 )}
 
-                                {/* Animated Mascot & Floating Crown Container */}
-                                <div className="relative w-full h-72 flex justify-center items-end border-b-4 border-[#C3A45D] overflow-hidden">
+                                {/* Animated Mascot & Floating Crown Container (Pure Black Background) */}
+                                <div className="relative w-full h-72 flex justify-center items-end border-b-4 border-[#C3A45D] bg-black overflow-hidden">
                                     {crownStage === 'idle' && (
                                         <img 
                                             src="Chicken no hat.jpeg" 
@@ -707,7 +759,7 @@
                                     )}
 
                                     {crownStage === 'crowning' && (
-                                        <div className="relative flex justify-center items-end w-full h-full">
+                                        <div className="relative flex justify-center items-end w-full h-full bg-black">
                                             <img 
                                                 src="Hat.jpeg" 
                                                 className="w-32 absolute top-1 z-10 animate-hat-float" 
@@ -731,7 +783,22 @@
                                     <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest absolute -bottom-6">Podium</div>
                                 </div>
 
-                                <div className="mt-16 space-y-4">
+                                {/* Prominent Winner Name & Score Display */}
+                                {crownStage !== 'idle' && (
+                                    <div className="mt-8 p-4 bg-[#231e2b] border-2 border-[#C3A45D] rounded-2xl w-full animate-fade-in shadow-[0_0_25px_rgba(195,164,93,0.3)]">
+                                        <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest mb-1 flex items-center justify-center gap-1">
+                                            <Icon name="crown" size="16" color="#C3A45D" /> Official Champion <Icon name="crown" size="16" color="#C3A45D" />
+                                        </div>
+                                        <div className="text-3xl font-black text-white uppercase tracking-wide gold-glow leading-tight break-words">
+                                            {winner.nickname || winner.name || 'The Champion'}
+                                        </div>
+                                        <div className="text-sm font-bold text-[#82469d] mt-2">
+                                            Total Score: <span className="text-[#C3A45D] text-lg font-black">{calculateTotal(winner)}</span> PTS
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="mt-12 space-y-4 pb-8">
                                     <button 
                                         onClick={() => setPlayers(prev => prev.map(p => ({ ...p, currentFrame: 10 })))}
                                         className="block text-[10px] text-[#82469d] hover:text-[#C3A45D] transition-colors underline uppercase tracking-wider mx-auto"
