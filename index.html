@@ -164,9 +164,11 @@
             const [loadingAiId, setLoadingAiId] = useState(null);
             const [crownStage, setCrownStage] = useState('idle');
 
-            // Touch Swipe Tracking
+            // Card Deck Physics & Interactive Swipe State
+            const [dragOffset, setDragOffset] = useState(0);
+            const [isDragging, setIsDragging] = useState(false);
+            const [cardAnimClass, setCardAnimClass] = useState('');
             const touchStartX = useRef(0);
-            const touchEndX = useRef(0);
 
             useEffect(() => {
                 localStorage.setItem('tc_app_phase', appPhase);
@@ -317,36 +319,94 @@
                 });
             };
 
-            // Swipe Handler Functions
+            // Card Interactive Touch Physics & Transitions
             const handleTouchStart = (e) => {
                 touchStartX.current = e.targetTouches[0].clientX;
-                touchEndX.current = e.targetTouches[0].clientX;
+                setIsDragging(true);
             };
 
             const handleTouchMove = (e) => {
-                touchEndX.current = e.targetTouches[0].clientX;
+                if (!isDragging) return;
+                const currentX = e.targetTouches[0].clientX;
+                const offset = currentX - touchStartX.current;
+                setDragOffset(offset);
             };
 
             const handleTouchEnd = () => {
-                const swipeDistance = touchStartX.current - touchEndX.current;
-                const minSwipeDistance = 50;
+                if (!isDragging) return;
+                setIsDragging(false);
+                const threshold = 65;
 
-                if (Math.abs(swipeDistance) > minSwipeDistance) {
-                    const currentIndex = players.findIndex(p => p.id === activePlayerId);
-                    if (currentIndex !== -1) {
-                        let nextIndex;
-                        if (swipeDistance > 0) {
-                            // Swiped Left -> Next Player
-                            nextIndex = (currentIndex + 1) % players.length;
-                        } else {
-                            // Swiped Right -> Previous Player
-                            nextIndex = (currentIndex - 1 + players.length) % players.length;
-                        }
+                const currentIndex = players.findIndex(p => p.id === activePlayerId);
+
+                if (dragOffset < -threshold) {
+                    // Swiped Left -> Animate Out Left, Load Next Player, Animate In Right
+                    const nextIndex = (currentIndex + 1) % players.length;
+                    setCardAnimClass('exit-left');
+                    setTimeout(() => {
                         setActivePlayerId(players[nextIndex].id);
-                    }
+                        setDragOffset(0);
+                        setCardAnimClass('enter-right');
+                        setTimeout(() => setCardAnimClass(''), 180);
+                    }, 140);
+                } else if (dragOffset > threshold) {
+                    // Swiped Right -> Animate Out Right, Load Previous Player, Animate In Left
+                    const prevIndex = (currentIndex - 1 + players.length) % players.length;
+                    setCardAnimClass('exit-right');
+                    setTimeout(() => {
+                        setActivePlayerId(players[prevIndex].id);
+                        setDragOffset(0);
+                        setCardAnimClass('enter-left');
+                        setTimeout(() => setCardAnimClass(''), 180);
+                    }, 140);
+                } else {
+                    // Snap card back into place smoothly
+                    setDragOffset(0);
                 }
-                touchStartX.current = 0;
-                touchEndX.current = 0;
+            };
+
+            // Inline Card Dynamic Style Calculator
+            const getCardStyle = () => {
+                if (isDragging) {
+                    return {
+                        transform: `translateX(${dragOffset}px) rotate(${dragOffset * 0.03}deg)`,
+                        opacity: Math.max(0.4, 1 - Math.abs(dragOffset) / 320),
+                        transition: 'none'
+                    };
+                }
+                if (cardAnimClass === 'exit-left') {
+                    return {
+                        transform: 'translateX(-120%) rotate(-8deg)',
+                        opacity: 0,
+                        transition: 'all 0.15s ease-in'
+                    };
+                }
+                if (cardAnimClass === 'exit-right') {
+                    return {
+                        transform: 'translateX(120%) rotate(8deg)',
+                        opacity: 0,
+                        transition: 'all 0.15s ease-in'
+                    };
+                }
+                if (cardAnimClass === 'enter-right') {
+                    return {
+                        transform: 'translateX(0) rotate(0deg)',
+                        opacity: 1,
+                        transition: 'all 0.18s cubic-bezier(0.25, 1, 0.5, 1)'
+                    };
+                }
+                if (cardAnimClass === 'enter-left') {
+                    return {
+                        transform: 'translateX(0) rotate(0deg)',
+                        opacity: 1,
+                        transition: 'all 0.18s cubic-bezier(0.25, 1, 0.5, 1)'
+                    };
+                }
+                return {
+                    transform: 'translateX(0) rotate(0deg)',
+                    opacity: 1,
+                    transition: 'all 0.25s cubic-bezier(0.25, 1, 0.5, 1)'
+                };
             };
 
             const calculateTotal = (p) => p.officialScore + (p.perfectNines * 25) + (p.thursdayNines * 10);
@@ -547,13 +607,15 @@
                         </div>
                     )}
 
-                    <main className="flex-1 max-w-md w-full mx-auto relative">
+                    <main className="flex-1 max-w-md w-full mx-auto relative overflow-hidden">
                         {activeTab === 'scoring' && (
                             <div className="p-4 space-y-4">
-                                <div className="mb-4">
+                                <div className="mb-2">
                                     <div className="flex justify-between items-center mb-2">
                                         <div className="text-xs text-[#C3A45D] font-bold uppercase">Select Active Bowler</div>
-                                        <div className="text-[10px] text-gray-400 italic">👈 Swipe card to switch 👉</div>
+                                        <div className="text-[10px] text-gray-400 italic flex items-center gap-1">
+                                            👈 Swipe card to switch 👉
+                                        </div>
                                     </div>
                                     <div className="flex overflow-x-auto gap-2 hide-scrollbar pb-2">
                                         {players.map(p => (
@@ -572,12 +634,13 @@
                                     </div>
                                 </div>
 
-                                {/* Active Bowler Card with Touch Swipe Enabled */}
+                                {/* Active Bowler Physical Deck Card Container */}
                                 <div 
                                     onTouchStart={handleTouchStart}
                                     onTouchMove={handleTouchMove}
                                     onTouchEnd={handleTouchEnd}
-                                    className="bg-[#231e2b] rounded-2xl border border-[#5E3273] overflow-hidden shadow-lg touch-pan-y"
+                                    style={getCardStyle()}
+                                    className="bg-[#231e2b] rounded-2xl border-2 border-[#5E3273] overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.8)] touch-pan-y transform-gpu"
                                 >
                                     <div className="p-4 border-b border-[#5E3273] flex justify-between items-center bg-[#1c1822]">
                                         <div className="flex items-center gap-3">
@@ -716,7 +779,7 @@
 
                         {activeTab === 'podium' && (
                             <div className="p-4 h-full flex flex-col items-center justify-center text-center bg-black min-h-screen">
-                                <h2 className="text-2xl font-black text-white mb-6 uppercase">Awards Ceremony</h2>
+                                <h2 className="text-2xl font-black text-white mb-8 uppercase">Awards Ceremony</h2>
                                 
                                 {players.every(p => p.currentFrame >= 10) ? (
                                     <button 
@@ -747,7 +810,6 @@
                                     </div>
                                 )}
 
-                                {/* Animated Mascot & Floating Crown Container (Pure Black Background) */}
                                 <div className="relative w-full h-72 flex justify-center items-end border-b-4 border-[#C3A45D] bg-black overflow-hidden">
                                     {crownStage === 'idle' && (
                                         <img 
@@ -783,7 +845,6 @@
                                     <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest absolute -bottom-6">Podium</div>
                                 </div>
 
-                                {/* Prominent Winner Name & Score Display */}
                                 {crownStage !== 'idle' && (
                                     <div className="mt-8 p-4 bg-[#231e2b] border-2 border-[#C3A45D] rounded-2xl w-full animate-fade-in shadow-[0_0_25px_rgba(195,164,93,0.3)]">
                                         <div className="text-[#C3A45D] text-xs font-bold uppercase tracking-widest mb-1 flex items-center justify-center gap-1">
