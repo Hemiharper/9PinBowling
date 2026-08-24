@@ -46,7 +46,7 @@
         const AIRTABLE_PAT = 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b';
         const AIRTABLE_BASE_ID = 'appgoVZaRVO1YvLh6';
         const AIRTABLE_TABLE = 'Players';
-        const SYNC_INTERVAL_MS = 2000; 
+        const SYNC_INTERVAL_MS = 2500; 
 
         const GEMINI_API_KEY = 'AQ.Ab8RN6L3JLRpSqMADupAHoV19yXxn4wDekFHSnAexC0vSn6IFg';
 
@@ -160,7 +160,7 @@
                 localStorage.setItem('tc_app_phase', appPhase);
             }, [appPhase]);
 
-            // Enhanced Airtable Fetch with Visible Error Reporting
+            // Robust Airtable Fetch
             const fetchAirtable = async () => {
                 if (!AIRTABLE_PAT) return;
                 
@@ -171,7 +171,7 @@
                     
                     if (!res.ok) {
                         const err = await res.json();
-                        setSyncError(`Airtable Error (${res.status}): ${err.error?.message || err.error || 'Failed to fetch'}`);
+                        setSyncError(`Airtable Fetch Error (${res.status}): ${err.error?.message || err.error || 'Failed'}`);
                         setSyncStatus('error');
                         return;
                     }
@@ -205,47 +205,53 @@
                 }
             };
 
-            // Enhanced Push with Auto-recordId mapping
+            // Smart Push: Creates record (POST) if missing, otherwise Updates (PATCH)
             const pushToAirtable = async (player) => {
                 if (!AIRTABLE_PAT) return;
                 
-                let recId = player.recordId;
-                if (!recId) {
-                    await fetchAirtable();
-                    recId = players.find(p => p.id === player.id)?.recordId;
-                    if (!recId) {
-                        setSyncError(`Sync Error: Could not match Airtable row for ${player.id}`);
-                        setSyncStatus('error');
-                        return;
-                    }
-                }
-
                 setSyncStatus('syncing');
+                const fields = {
+                    PlayerID: player.id,
+                    Name: player.name || '',
+                    Nickname: player.nickname || '',
+                    OfficialScore: Number(player.officialScore) || 0,
+                    PerfectNines: Number(player.perfectNines) || 0,
+                    ThursdayNines: Number(player.thursdayNines) || 0,
+                    CurrentFrame: Number(player.currentFrame) || 1
+                };
+
                 try {
-                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${recId}`, {
-                        method: 'PATCH',
-                        headers: {
-                            Authorization: `Bearer ${AIRTABLE_PAT}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            fields: {
-                                PlayerID: player.id,
-                                Name: player.name || '',
-                                Nickname: player.nickname || '',
-                                OfficialScore: Number(player.officialScore) || 0,
-                                PerfectNines: Number(player.perfectNines) || 0,
-                                ThursdayNines: Number(player.thursdayNines) || 0,
-                                CurrentFrame: Number(player.currentFrame) || 1
-                            }
-                        })
-                    });
+                    let res;
+                    if (player.recordId) {
+                        res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${player.recordId}`, {
+                            method: 'PATCH',
+                            headers: {
+                                Authorization: `Bearer ${AIRTABLE_PAT}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ fields })
+                        });
+                    } else {
+                        res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}`, {
+                            method: 'POST',
+                            headers: {
+                                Authorization: `Bearer ${AIRTABLE_PAT}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ fields })
+                        });
+                    }
 
                     if (!res.ok) {
                         const err = await res.json();
-                        setSyncError(`Update Error (${res.status}): ${err.error?.message || err.error || 'Check column names'}`);
+                        setSyncError(`Save Error (${res.status}): ${err.error?.message || JSON.stringify(err.error)}`);
                         setSyncStatus('error');
                         return;
+                    }
+
+                    const data = await res.json();
+                    if (data.id && !player.recordId) {
+                        setPlayers(prev => prev.map(p => p.id === player.id ? { ...p, recordId: data.id } : p));
                     }
 
                     setSyncError(null);
@@ -286,7 +292,13 @@
                 return () => clearInterval(interval);
             }, []);
 
-            const updatePlayer = (id, updates) => {
+            // Local State Update
+            const updatePlayerLocal = (id, updates) => {
+                setPlayers(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+            };
+
+            // Immediate Local + Sync Update (for buttons/blurs)
+            const updatePlayerAndSync = (id, updates) => {
                 let updatedPlayer = null;
                 setPlayers(prev => prev.map(p => {
                     if (p.id === id) {
@@ -384,7 +396,8 @@
                                             type="text" 
                                             placeholder={`Player ${idx + 1} Name`} 
                                             value={p.name}
-                                            onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
+                                            onChange={(e) => updatePlayerLocal(p.id, { name: e.target.value })}
+                                            onBlur={() => pushToAirtable(p)}
                                             className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-white text-sm placeholder-gray-500"
                                         />
                                         <div className="flex gap-2">
@@ -392,14 +405,15 @@
                                                 type="text" 
                                                 placeholder="AI Nickname" 
                                                 value={p.nickname}
-                                                onChange={(e) => updatePlayer(p.id, { nickname: e.target.value })}
+                                                onChange={(e) => updatePlayerLocal(p.id, { nickname: e.target.value })}
+                                                onBlur={() => pushToAirtable(p)}
                                                 className="w-full bg-[#1c1822] border border-[#5E3273] rounded p-2 text-[#C3A45D] font-bold text-sm placeholder-gray-500"
                                             />
                                             <button 
                                                 onClick={async () => {
                                                     setLoadingAiId(p.id);
                                                     const aiNick = await generateGeminiNickname(p.name || `Player ${idx + 1}`);
-                                                    updatePlayer(p.id, { nickname: aiNick });
+                                                    updatePlayerAndSync(p.id, { nickname: aiNick });
                                                     setLoadingAiId(null);
                                                 }}
                                                 disabled={loadingAiId === p.id}
@@ -419,8 +433,13 @@
 
                         <div className="fixed bottom-0 left-0 right-0 p-4 bg-[#131313] border-t border-[#5E3273] z-10 flex gap-2">
                             <button 
-                                onClick={() => {
+                                onClick={async () => {
                                     unlockAllAudio();
+                                    for (const p of players) {
+                                        if (p.name || p.nickname) {
+                                            await pushToAirtable(p);
+                                        }
+                                    }
                                     setAppPhase('game');
                                 }}
                                 className="w-full bg-[#C3A45D] text-[#131313] font-black py-4 rounded-lg uppercase tracking-wider shadow-lg"
@@ -457,7 +476,6 @@
                             </div>
                         </div>
 
-                        {/* Error Banner Notification */}
                         {syncError && (
                             <div className="mt-2 p-2 bg-red-900/80 border border-red-500 rounded text-red-200 text-[10px] font-bold text-center">
                                 {syncError}
@@ -525,7 +543,8 @@
                                             <input 
                                                 type="number" 
                                                 value={activePlayer.officialScore === 0 ? '' : activePlayer.officialScore}
-                                                onChange={(e) => updatePlayer(activePlayer.id, { officialScore: parseInt(e.target.value) || 0 })}
+                                                onChange={(e) => updatePlayerLocal(activePlayer.id, { officialScore: parseInt(e.target.value) || 0 })}
+                                                onBlur={() => pushToAirtable(activePlayer)}
                                                 className="bg-[#131313] border-2 border-[#5E3273] rounded-lg text-2xl font-black text-center w-24 py-2 text-white"
                                                 placeholder="0"
                                             />
@@ -535,7 +554,7 @@
                                             <button 
                                                 onClick={() => {
                                                     playSfx('perfect9');
-                                                    updatePlayer(activePlayer.id, { perfectNines: activePlayer.perfectNines + 1 });
+                                                    updatePlayerAndSync(activePlayer.id, { perfectNines: activePlayer.perfectNines + 1 });
                                                 }}
                                                 className="flex-1 bg-[#5E3273] border-2 border-[#82469d] rounded-xl p-4 active:scale-95 transition-transform flex flex-col items-center justify-center text-center shadow-lg"
                                             >
@@ -547,7 +566,7 @@
                                             </button>
                                             <button 
                                                 onClick={() => {
-                                                    if(activePlayer.perfectNines > 0) updatePlayer(activePlayer.id, { perfectNines: activePlayer.perfectNines - 1 });
+                                                    if(activePlayer.perfectNines > 0) updatePlayerAndSync(activePlayer.id, { perfectNines: activePlayer.perfectNines - 1 });
                                                 }}
                                                 className="w-16 bg-red-900/30 border-2 border-red-900/50 rounded-xl flex flex-col items-center justify-center text-red-500 text-[10px] font-bold active:bg-red-900/50"
                                             >
@@ -560,7 +579,7 @@
                                             <button 
                                                 onClick={() => {
                                                     playSfx('thursday9');
-                                                    updatePlayer(activePlayer.id, { thursdayNines: activePlayer.thursdayNines + 1 });
+                                                    updatePlayerAndSync(activePlayer.id, { thursdayNines: activePlayer.thursdayNines + 1 });
                                                 }}
                                                 className="flex-1 bg-[#1c1822] border-2 border-[#C3A45D] rounded-xl p-4 active:scale-95 transition-transform flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(195,164,93,0.1)]"
                                             >
@@ -572,7 +591,7 @@
                                             </button>
                                             <button 
                                                 onClick={() => {
-                                                    if(activePlayer.thursdayNines > 0) updatePlayer(activePlayer.id, { thursdayNines: activePlayer.thursdayNines - 1 });
+                                                    if(activePlayer.thursdayNines > 0) updatePlayerAndSync(activePlayer.id, { thursdayNines: activePlayer.thursdayNines - 1 });
                                                 }}
                                                 className="w-16 bg-red-900/30 border-2 border-red-900/50 rounded-xl flex flex-col items-center justify-center text-red-500 text-[10px] font-bold active:bg-red-900/50"
                                             >
@@ -584,7 +603,7 @@
 
                                     <div className="p-4 bg-[#1c1822] border-t border-[#5E3273]">
                                         <button 
-                                            onClick={() => updatePlayer(activePlayer.id, { currentFrame: Math.min(10, activePlayer.currentFrame + 1) })}
+                                            onClick={() => updatePlayerAndSync(activePlayer.id, { currentFrame: Math.min(10, activePlayer.currentFrame + 1) })}
                                             disabled={activePlayer.currentFrame >= 10}
                                             className="w-full bg-white text-black font-black py-4 rounded-lg uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50 disabled:bg-gray-600"
                                         >
