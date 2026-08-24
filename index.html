@@ -48,10 +48,8 @@
         const AIRTABLE_TABLE = 'Players';
         const SYNC_INTERVAL_MS = 2500; 
 
-        // Active Gemini API Key
         const GEMINI_API_KEY = 'AQ.Ab8RN6L3JLRpSqMADupAHoV19yXxn4wDekFHSnAexC0vSn6IFg';
 
-        // Sound Effects with Muted Unlocking
         const sfx = {
             thursday9: new Audio('thursday.mp3'),
             perfect9: new Audio('perfect.mp3'),
@@ -71,7 +69,6 @@
             }
         };
 
-        // Silent Audio Unlock (Prevents sound bleed on setup screens)
         const unlockAllAudio = () => {
             Object.values(sfx).forEach(a => {
                 a.muted = true;
@@ -83,19 +80,25 @@
             });
         };
 
-        const PREFIXES = ['Kingpin', 'The Bowling', 'Gutter', 'Split', 'Thunder', 'Alley', 'El', 'Big Pin', 'Striker', 'The Velvet'];
-        const SUFFIXES = ['Machine', 'Bandit', 'Prince', 'Wizard', 'Viper', 'Assassin', 'Loco', 'Weapon', 'Maverick', 'Boss'];
+        // Expanded Hilarious Fallback Generator
+        const PREFIXES = ['Kingpin', 'El Spin', 'Gutter Royalty', 'Split', 'Thunder', 'Sir', 'The Velvet', 'Uncle', 'Dr.', 'Captain', 'Turbo', 'Bad News', 'Wildcard', 'Nacho', 'Sensational', 'Slick'];
+        const SUFFIXES = ['Machine', 'Bandit', 'Prince', 'Wizard', 'Viper', 'Assassin', 'Loco', 'Dynamite', 'Sizzler', 'Overdrive', 'Trouble', 'Thunderbolt', 'Maverick', 'El Diablo', 'Tornado'];
         
         const generateGeminiNickname = async (name) => {
-            if (!name) return "The Bowling Legend";
-            if (!GEMINI_API_KEY || GEMINI_API_KEY.startsWith('YOUR_')) {
+            const cleanName = (name || 'Bowler').trim().split(' ')[0];
+            
+            const getRandomNick = () => {
                 const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
                 const suffix = SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)];
-                return `${prefix} ${name.split(' ')[0]} ${suffix}`;
+                return `${prefix} ${cleanName} ${suffix}`;
+            };
+
+            if (!GEMINI_API_KEY || !GEMINI_API_KEY.startsWith('AIzaSy')) {
+                return getRandomNick();
             }
 
             try {
-                const prompt = `Generate ONE ridiculously funny, absurd bowling nickname for "${name}". Return ONLY the nickname string.`;
+                const prompt = `Generate ONE short, absurd, hilarious 1970s bowling nickname for a player named "${cleanName}". Examples: "El Spin Wizard", "Gutter Royalty", "Big Strike Energy". Return ONLY the nickname string without quotes.`;
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -104,9 +107,9 @@
 
                 const data = await response.json();
                 const nickname = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/^["']|["']$/g, '');
-                return nickname || `${name} "The Pin Crusher"`;
+                return nickname || getRandomNick();
             } catch (e) {
-                return `${name} "The Alley Cat"`;
+                return getRandomNick();
             }
         };
 
