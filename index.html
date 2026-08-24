@@ -164,10 +164,10 @@
             const [loadingAiId, setLoadingAiId] = useState(null);
             const [crownStage, setCrownStage] = useState('idle');
 
-            // Card Deck Physics & Interactive Swipe State
+            // True Deck Transition Card States: 'center', 'exit-left', 'exit-right', 'prep-left', 'prep-right'
+            const [cardPos, setCardPos] = useState('center');
             const [dragOffset, setDragOffset] = useState(0);
             const [isDragging, setIsDragging] = useState(false);
-            const [cardAnimClass, setCardAnimClass] = useState('');
             const touchStartX = useRef(0);
 
             useEffect(() => {
@@ -319,7 +319,7 @@
                 });
             };
 
-            // Card Interactive Touch Physics & Transitions
+            // Touch Drag & Card Deck Slide Mechanics
             const handleTouchStart = (e) => {
                 touchStartX.current = e.targetTouches[0].clientX;
                 setIsDragging(true);
@@ -328,84 +328,97 @@
             const handleTouchMove = (e) => {
                 if (!isDragging) return;
                 const currentX = e.targetTouches[0].clientX;
-                const offset = currentX - touchStartX.current;
-                setDragOffset(offset);
+                setDragOffset(currentX - touchStartX.current);
             };
 
             const handleTouchEnd = () => {
                 if (!isDragging) return;
                 setIsDragging(false);
-                const threshold = 65;
-
+                const threshold = 60;
                 const currentIndex = players.findIndex(p => p.id === activePlayerId);
 
                 if (dragOffset < -threshold) {
-                    // Swiped Left -> Animate Out Left, Load Next Player, Animate In Right
+                    // Swiped Left -> Exit Card Left, Prep Next Player Right, Slide In
                     const nextIndex = (currentIndex + 1) % players.length;
-                    setCardAnimClass('exit-left');
+                    setCardPos('exit-left');
+
                     setTimeout(() => {
                         setActivePlayerId(players[nextIndex].id);
                         setDragOffset(0);
-                        setCardAnimClass('enter-right');
-                        setTimeout(() => setCardAnimClass(''), 180);
-                    }, 140);
+                        setCardPos('prep-right');
+
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                setCardPos('center');
+                            });
+                        });
+                    }, 180);
+
                 } else if (dragOffset > threshold) {
-                    // Swiped Right -> Animate Out Right, Load Previous Player, Animate In Left
+                    // Swiped Right -> Exit Card Right, Prep Previous Player Left, Slide In
                     const prevIndex = (currentIndex - 1 + players.length) % players.length;
-                    setCardAnimClass('exit-right');
+                    setCardPos('exit-right');
+
                     setTimeout(() => {
                         setActivePlayerId(players[prevIndex].id);
                         setDragOffset(0);
-                        setCardAnimClass('enter-left');
-                        setTimeout(() => setCardAnimClass(''), 180);
-                    }, 140);
+                        setCardPos('prep-left');
+
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                setCardPos('center');
+                            });
+                        });
+                    }, 180);
+
                 } else {
-                    // Snap card back into place smoothly
+                    // Snap back if threshold not met
                     setDragOffset(0);
+                    setCardPos('center');
                 }
             };
 
-            // Inline Card Dynamic Style Calculator
+            // Card Style Calculator based on Touch/Anim State
             const getCardStyle = () => {
                 if (isDragging) {
                     return {
-                        transform: `translateX(${dragOffset}px) rotate(${dragOffset * 0.03}deg)`,
-                        opacity: Math.max(0.4, 1 - Math.abs(dragOffset) / 320),
+                        transform: `translateX(${dragOffset}px) rotate(${dragOffset * 0.04}deg)`,
+                        opacity: 1,
                         transition: 'none'
                     };
                 }
-                if (cardAnimClass === 'exit-left') {
+                if (cardPos === 'exit-left') {
                     return {
-                        transform: 'translateX(-120%) rotate(-8deg)',
+                        transform: 'translateX(-120vw) rotate(-15deg)',
                         opacity: 0,
-                        transition: 'all 0.15s ease-in'
+                        transition: 'transform 0.18s ease-in, opacity 0.18s ease-in'
                     };
                 }
-                if (cardAnimClass === 'exit-right') {
+                if (cardPos === 'exit-right') {
                     return {
-                        transform: 'translateX(120%) rotate(8deg)',
+                        transform: 'translateX(120vw) rotate(15deg)',
                         opacity: 0,
-                        transition: 'all 0.15s ease-in'
+                        transition: 'transform 0.18s ease-in, opacity 0.18s ease-in'
                     };
                 }
-                if (cardAnimClass === 'enter-right') {
+                if (cardPos === 'prep-right') {
                     return {
-                        transform: 'translateX(0) rotate(0deg)',
-                        opacity: 1,
-                        transition: 'all 0.18s cubic-bezier(0.25, 1, 0.5, 1)'
+                        transform: 'translateX(100vw) rotate(10deg)',
+                        opacity: 0,
+                        transition: 'none'
                     };
                 }
-                if (cardAnimClass === 'enter-left') {
+                if (cardPos === 'prep-left') {
                     return {
-                        transform: 'translateX(0) rotate(0deg)',
-                        opacity: 1,
-                        transition: 'all 0.18s cubic-bezier(0.25, 1, 0.5, 1)'
+                        transform: 'translateX(-100vw) rotate(-10deg)',
+                        opacity: 0,
+                        transition: 'none'
                     };
                 }
                 return {
                     transform: 'translateX(0) rotate(0deg)',
                     opacity: 1,
-                    transition: 'all 0.25s cubic-bezier(0.25, 1, 0.5, 1)'
+                    transition: 'transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s ease-out'
                 };
             };
 
@@ -614,7 +627,7 @@
                                     <div className="flex justify-between items-center mb-2">
                                         <div className="text-xs text-[#C3A45D] font-bold uppercase">Select Active Bowler</div>
                                         <div className="text-[10px] text-gray-400 italic flex items-center gap-1">
-                                            👈 Swipe card to switch 👉
+                                            👈 Swipe card to deal next 👉
                                         </div>
                                     </div>
                                     <div className="flex overflow-x-auto gap-2 hide-scrollbar pb-2">
