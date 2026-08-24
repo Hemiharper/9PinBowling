@@ -46,7 +46,7 @@
         const AIRTABLE_PAT = 'patmis6vFyZugWymr.206125d4815cfe4484eb63f772a18490a0c9f90e4a56a8cad638b33bfe38355b';
         const AIRTABLE_BASE_ID = 'appgoVZaRVO1YvLh6';
         const AIRTABLE_TABLE = 'Players';
-        const SYNC_INTERVAL_MS = 2500; 
+        const SYNC_INTERVAL_MS = 2000; 
 
         const GEMINI_API_KEY = 'AQ.Ab8RN6L3JLRpSqMADupAHoV19yXxn4wDekFHSnAexC0vSn6IFg';
 
@@ -80,7 +80,6 @@
             });
         };
 
-        // Expanded Hilarious Fallback Generator
         const PREFIXES = ['Kingpin', 'El Spin', 'Gutter Royalty', 'Split', 'Thunder', 'Sir', 'The Velvet', 'Uncle', 'Dr.', 'Captain', 'Turbo', 'Bad News', 'Wildcard', 'Nacho', 'Sensational', 'Slick'];
         const SUFFIXES = ['Machine', 'Bandit', 'Prince', 'Wizard', 'Viper', 'Assassin', 'Loco', 'Dynamite', 'Sizzler', 'Overdrive', 'Trouble', 'Thunderbolt', 'Maverick', 'El Diablo', 'Tornado'];
         
@@ -152,7 +151,8 @@
             const [players, setPlayers] = useState(initialPlayers);
             const [activePlayerId, setActivePlayerId] = useState('p1');
             const [activeTab, setActiveTab] = useState('scoring');
-            const [syncStatus, setSyncStatus] = useState('offline');
+            const [syncStatus, setSyncStatus] = useState('connecting');
+            const [syncError, setSyncError] = useState(null);
             const [showResetModal, setShowResetModal] = useState(false);
             const [loadingAiId, setLoadingAiId] = useState(null);
 
@@ -160,16 +160,26 @@
                 localStorage.setItem('tc_app_phase', appPhase);
             }, [appPhase]);
 
+            // Enhanced Airtable Fetch with Visible Error Reporting
             const fetchAirtable = async () => {
-                if (!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_')) return;
+                if (!AIRTABLE_PAT) return;
                 
                 try {
-                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}?sort%5B0%5D%5Bfield%5D=PlayerID`, {
+                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}`, {
                         headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }
                     });
+                    
+                    if (!res.ok) {
+                        const err = await res.json();
+                        setSyncError(`Airtable Error (${res.status}): ${err.error?.message || err.error || 'Failed to fetch'}`);
+                        setSyncStatus('error');
+                        return;
+                    }
+
+                    setSyncError(null);
                     const data = await res.json();
                     
-                    if (data.records && data.records.length > 0) {
+                    if (data.records) {
                         setPlayers(prev => prev.map((p, idx) => {
                             const record = data.records.find(r => r.fields.PlayerID === p.id) || data.records[idx];
                             if (record) {
@@ -178,10 +188,10 @@
                                     recordId: record.id,
                                     name: record.fields.Name !== undefined ? record.fields.Name : p.name,
                                     nickname: record.fields.Nickname !== undefined ? record.fields.Nickname : p.nickname,
-                                    officialScore: record.fields.OfficialScore !== undefined ? record.fields.OfficialScore : p.officialScore,
-                                    perfectNines: record.fields.PerfectNines !== undefined ? record.fields.PerfectNines : p.perfectNines,
-                                    thursdayNines: record.fields.ThursdayNines !== undefined ? record.fields.ThursdayNines : p.thursdayNines,
-                                    currentFrame: record.fields.CurrentFrame !== undefined ? record.fields.CurrentFrame : p.currentFrame
+                                    officialScore: record.fields.OfficialScore !== undefined ? Number(record.fields.OfficialScore) : p.officialScore,
+                                    perfectNines: record.fields.PerfectNines !== undefined ? Number(record.fields.PerfectNines) : p.perfectNines,
+                                    thursdayNines: record.fields.ThursdayNines !== undefined ? Number(record.fields.ThursdayNines) : p.thursdayNines,
+                                    currentFrame: record.fields.CurrentFrame !== undefined ? Number(record.fields.CurrentFrame) : p.currentFrame
                                 };
                             }
                             return p;
@@ -190,15 +200,29 @@
                     }
                 } catch (e) {
                     console.error("Airtable fetch error:", e);
+                    setSyncError(`Network Error: ${e.message}`);
                     setSyncStatus('error');
                 }
             };
 
+            // Enhanced Push with Auto-recordId mapping
             const pushToAirtable = async (player) => {
-                if (!AIRTABLE_PAT || AIRTABLE_PAT.startsWith('YOUR_') || !player.recordId) return;
+                if (!AIRTABLE_PAT) return;
+                
+                let recId = player.recordId;
+                if (!recId) {
+                    await fetchAirtable();
+                    recId = players.find(p => p.id === player.id)?.recordId;
+                    if (!recId) {
+                        setSyncError(`Sync Error: Could not match Airtable row for ${player.id}`);
+                        setSyncStatus('error');
+                        return;
+                    }
+                }
+
                 setSyncStatus('syncing');
                 try {
-                    await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${player.recordId}`, {
+                    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}/${recId}`, {
                         method: 'PATCH',
                         headers: {
                             Authorization: `Bearer ${AIRTABLE_PAT}`,
@@ -216,9 +240,19 @@
                             }
                         })
                     });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        setSyncError(`Update Error (${res.status}): ${err.error?.message || err.error || 'Check column names'}`);
+                        setSyncStatus('error');
+                        return;
+                    }
+
+                    setSyncError(null);
                     setSyncStatus('synced');
                 } catch (e) {
                     console.error("Airtable update error:", e);
+                    setSyncError(`Save Error: ${e.message}`);
                     setSyncStatus('error');
                 }
             };
@@ -422,6 +456,13 @@
                                 <div className={`w-3 h-3 rounded-full ${syncStatus === 'synced' ? 'bg-green-500' : syncStatus === 'syncing' ? 'bg-yellow-500' : 'bg-red-500'}`} title={`Sync Status: ${syncStatus}`}></div>
                             </div>
                         </div>
+
+                        {/* Error Banner Notification */}
+                        {syncError && (
+                            <div className="mt-2 p-2 bg-red-900/80 border border-red-500 rounded text-red-200 text-[10px] font-bold text-center">
+                                {syncError}
+                            </div>
+                        )}
                     </header>
 
                     {showResetModal && (
